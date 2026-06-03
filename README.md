@@ -1,56 +1,189 @@
-**Project Status**
+# ANAGENTICFRAMEWORK (MULTIAGENT)
 
-**Working:**
-- **Health endpoint:** `GET /health` returns service status.
-- **Ingestion API:** `POST /ingestion/jobs` enqueues ingestion jobs (PDF/CSV) and job lifecycle (`queued` -> `running` -> `succeeded`/`failed`) is tracked.
-- **Azure auth (local):** `DefaultAzureCredential` works via local `az login` and name-based endpoint derivation for Key Vault and AI Search.
-- **Blob access:** App can list/read blobs from the configured storage account/container.
-- **Retrieval routing:** Query router delegates to `structured` (Fabric stub) or `semantic` (Azure AI Search) paths and returns `citations`.
+An enterprise-style Retrieval-Augmented Generation (RAG) system built using:
 
-**Partially implemented / Not yet configured:**
-- **Model generation:** OpenAI/Foundry generation call is wired in code, but you must configure `AZURE_OPENAI_ENDPOINT` and `AZURE_OPENAI_CHAT_DEPLOYMENT` (or store the key in Key Vault) to get generated answers instead of the fallback message.
-- **Fabric SQL execution:** The Fabric (Lakehouse) SQL execution layer is a placeholder. There is a direct test script pattern available to verify connectivity; the actual production query wiring is TODO.
-- **Index creation / full indexing:** Azure AI Search index bootstrap and indexing jobs are not yet automated.
-- **Persistent queue/worker:** Current job registry is in-memory for smoke tests — needs a durable queue (e.g., Azure Storage Queue, Service Bus, or DB) for production.
-- **PDF OCR/text extraction enhancements:** Basic PDF flow exists but may report `processed_records=0` depending on blob contents; robust OCR integration is TODO.
+* Azure OpenAI
+* Azure AI Search
+* Microsoft Fabric SQL
+* FastAPI
+* Hybrid Retrieval Architecture
 
-**Files of interest:**
-- `app.py`: API entrypoint and routes. See [app.py](app.py#L1).
-- `retrieval/retrieval.py`: Retrieval and generation logic. See [retrieval/retrieval.py](retrieval/retrieval.py#L1).
-- `utils/azure_clients.py`: Azure client factories (Blob, Search, Key Vault, OpenAI). See [utils/azure_clients.py](utils/azure_clients.py#L1).
-- `TODO.md`: Key Vault and smoke-test steps I added for you. See [TODO.md](TODO.md#L1).
+---
 
-**What is `jobid.txt`?**
-- `jobid.txt` is a temporary helper file used during smoke tests to store the last ingestion `job_id` returned by `POST /ingestion/jobs`. The test script in the terminal writes the id there so subsequent `GET /ingestion/jobs/<id>` calls can poll the status easily.
-- You can safely delete `jobid.txt` at any time. It is only an ephemeral convenience for manual testing.
+# Features
 
-**Quick smoke-test (copy/paste PowerShell)**
+* Semantic PDF Retrieval
+* Structured SQL Retrieval
+* Hybrid Retrieval (SQL + Semantic)
+* Dynamic SQL Generation using LLMs
+* SQL Safety Guardrails
+* Citation Support
+* Generated SQL Visibility
+* Azure Identity Authentication
+* Modular Retrieval Architecture
+* Multi-Source Ingestion Pipeline
+* PDF Chunking & Processing
+* CSV/Table-Based Retrieval
+* Retrieval Routing Framework
 
-```powershell
-# activate venv
-& ".\.venv\Scripts\Activate.ps1"
+---
 
-# start server (in background terminal)
-uvicorn app:app --host 127.0.0.1 --port 8000 --reload
+# Retrieval Modes
 
-# health
-curl http://127.0.0.1:8000/health
+## Semantic Retrieval
 
-# enqueue ingestion job and save id
-$body = @{source_type='pdf'; blob_path='sample.pdf'} | ConvertTo-Json
-$resp = Invoke-RestMethod -Uri http://127.0.0.1:8000/ingestion/jobs -Method Post -Body $body -ContentType 'application/json'
-$resp.job_id > jobid.txt
+Uses vector embeddings and Azure AI Search for semantic PDF/document retrieval.
 
-# poll once
-$job = Get-Content jobid.txt -Raw; Invoke-RestMethod -Uri "http://127.0.0.1:8000/ingestion/jobs/$job"
+## Structured Retrieval
 
-# run query (use JSON key `query`)
-curl -X POST http://127.0.0.1:8000/query -H "Content-Type: application/json" -d '{"query":"What is the startup funding total?"}'
+Converts natural language into SQL queries and retrieves structured business data from Microsoft Fabric SQL.
+
+## Hybrid Retrieval
+
+Combines semantic reasoning from PDFs with factual structured SQL records.
+
+---
+
+# Multi-Ingestion Architecture
+
+The system supports ingestion from multiple enterprise data sources:
+
+* PDF Documents
+* CSV Files
+* SQL Tables (Microsoft Fabric Lakehouse / Warehouse)
+
+Each source follows its own preprocessing pipeline:
+
+| Source Type | Processing                          |
+| ----------- | ----------------------------------- |
+| PDF         | Text Extraction → Chunking          |
+| CSV         | Schema Cleaning → Structured Tables |
+| SQL         | Relational Query Processing         |
+
+---
+
+# Tech Stack
+
+* Python
+* FastAPI
+* Azure OpenAI
+* Azure AI Search
+* Microsoft Fabric SQL
+* Azure Blob Storage
+* pyodbc
+* PyMuPDF
+* LangChain
+
+---
+
+# Example Queries
+
+* "What is financial analysis?"
+* "Which startups received funding from Tiger Global?"
+* "How much did Tiger Global invest in education startups like Vedantu and why?"
+* "Summarize the uploaded financial reports."
+* "Find startup trends from structured funding datasets."
+
+---
+
+# Run Locally
+
+```bash
+uvicorn app.main:app --reload
 ```
 
-**Next steps to enable generation (summary)**
-- Store your model key in Key Vault (`OPENAI-API-KEY`) and set `AZURE_KEY_VAULT_NAME` in `.env`.
-- Add `AZURE_OPENAI_ENDPOINT` and `AZURE_OPENAI_CHAT_DEPLOYMENT` to `.env` (or set equivalent Key Vault secrets).
-- Restart server and re-run the smoke test — `/query` should return a generated answer and `mode_used` indicating generation.
+Visit Swagger docs at:
 
-If you want, I can run the generation test for you after you set the Key Vault secret and `.env` values — just tell me when it's done.
+```text
+http://127.0.0.1:8000/docs
+```
+
+(unless another port is configured)
+
+---
+
+# Repository Structure
+
+```text
+ANAGENTICFRAMEWORK (MULTIAGENT)
+│
+├── config
+│   └── settings.py
+│
+├── embeddings
+│   └── embeddings.py
+│
+├── ingestion
+│   └── ingestion.py
+│
+├── models
+│   └── schema.py
+│
+├── observability
+│
+├── retrieval
+│   ├── retrieval.py
+│   └── router.py
+│
+├── scripts
+│
+├── utils
+│   ├── azureclients.py
+│   └── utils.py
+│
+├── app.py
+├── README.md
+├── requirements.txt
+│
+├── testcsvretrieval.py
+├── testfabricsql.py
+├── testhybrid.py
+└── testretrieval.py
+```
+
+---
+
+# Environment Variables (`.env`)
+
+```env
+AZUREOPENAIENDPOINT=
+AZUREOPENAIAPIKEY=
+AZUREOPENAIDEPLOYMENT=
+
+AZUREAISEARCHENDPOINT=
+AZUREAISEARCHAPIKEY=
+AZUREAISEARCHINDEX=
+
+FABRICSQLCONNECTION_STRING=
+```
+
+---
+
+# Architecture Overview
+
+```text
+Azure Blob Storage (RAW)
+        ↓
+Multi-Source Ingestion
+        ↓
+Specialized Processing
+    ├── PDF Chunking
+    ├── CSV Cleaning
+    └── SQL Processing
+        ↓
+Silver Layer (Lakehouse)
+        ↓
+Embeddings + Metadata
+        ↓
+Azure AI Search
+        ↓
+Retrieval Router
+        ↓
+Azure OpenAI Response Generation
+```
+
+---
+
+# License
+
+MIT

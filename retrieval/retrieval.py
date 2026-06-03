@@ -26,18 +26,23 @@ class RetrievalService:
         self.settings = get_settings()
         self.embedding_service = EmbeddingService()
 
+    
+
     def answer(self, request: QueryRequest, mode: RetrievalMode) -> QueryResponse:
         start = time.perf_counter()
-
+        generated_sql = None
+        citations = None
+        
         try:
+            
             if mode == RetrievalMode.SEMANTIC:
                 contexts, citations = self._semantic_retrieval(request)
                 answer = self._compose_answer(request.query, contexts)
             elif mode == RetrievalMode.STRUCTURED:
-                contexts, citations = self._structured_retrieval(request)
+                contexts, citations, generated_sql = self._structured_retrieval(request)
                 answer = self._compose_answer(request.query, contexts)
             else:
-                answer, citations = self._hybrid_retrieval(request)
+                answer, citations, generated_sql = self._hybrid_retrieval(request)
 
             latency_ms = int((time.perf_counter() - start) * 1000)
 
@@ -45,12 +50,14 @@ class RetrievalService:
                 {"query_latency_ms": float(latency_ms)},
                 tags={"mode": mode.value},
             )
+            
 
             return QueryResponse(
                 answer=answer,
                 mode_used=mode,
                 citations=citations,
                 latency_ms=latency_ms,
+                generated_sql=generated_sql,
             )
 
         except Exception as exc:
@@ -219,6 +226,41 @@ class RetrievalService:
         logger.info("Generated SQL: %s", sql)
         return sql
     
+    def _validate_sql_query(self, sql:str)->None:
+
+        normalized =  sql.lower().strip()
+
+        forbidden_keywords = [
+        "insert ",
+        "update ",
+        "delete ",
+        "drop ",
+        "alter ",
+        "truncate ",
+        "create ",
+        "merge ",
+        "exec ",
+        "execute ",
+        "grant ",
+        "revoke ",
+        "commit ",
+        "rollback ",
+        
+    ]
+        
+        for keyword in forbidden_keywords:
+          
+          if keyword in normalized:
+
+            raise RuntimeError(
+                f"Unsafe SQL detected: {keyword.strip()}"
+            )
+
+        if not normalized.startswith("select"):
+           
+
+           raise RuntimeError("Only SELECT queries allowed")
+    
 
     
 
@@ -306,7 +348,7 @@ class RetrievalService:
                 )
             ]
 
-            return contexts, citations
+            return contexts, citations, sql_query
 
         except Exception:
             logger.exception("Structured retrieval failed")
@@ -334,9 +376,11 @@ class RetrievalService:
             f"Database={self.settings.fabric_sql_database};"
             "Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;"
         )
-
+        
         with pyodbc.connect(conn_str, attrs_before=attrs_before) as conn:
             with conn.cursor() as cursor:
+                self._validate_sql_query(query)
+                
                 cursor.execute(query)
                 if cursor.description is None:
                     return []
@@ -359,13 +403,48 @@ class RetrievalService:
 
     def _hybrid_retrieval(self, request: QueryRequest) -> tuple[str, list[Citation]]:
         try:
-            semantic_contexts, semantic_citations = self._semantic_retrieval(request)
-            structured_contexts, structured_citations = self._structured_retrieval(request)
+
+            reasoning_keywords = [
+                "why",
+                "reason",
+                "explain",
+                "compare",
+                "difference",
+                "vs ",
+                "versus ",
+            ]
+            requires_reasoning = any(keyword in request.query.lower() for keyword in reasoning_keywords)
+            semantic_request = request.model_copy()
+
+            if requires_reasoning:
+               semantic_request.top_k = 8
+            else:
+               semantic_request.top_k = 3
+            semantic_contexts, semantic_citations = self._semantic_retrieval(semantic_request)
+            structured_contexts, structured_citations, generated_sql = self._structured_retrieval(request)
+
+
 
             semantic_text = "\n\n".join(semantic_contexts)
             structured_text = "\n\n".join(structured_contexts)
 
+            if requires_reasoning:
+               
+               synthesis_hint = """
+The user is asking for reasoning/explanation.
+Use PDF semantic context heavily for WHY/HOW analysis.
+Use SQL records for factual support only.
+"""
+            else:
+               
+               synthesis_hint = """
+The user is asking primarily for factual business data.
+Prioritize SQL structured records.
+"""
+
             combined_context = f"""
+
+            {synthesis_hint}
             PDF SEMANTIC CONTEXT:
 
             {semantic_text}
@@ -387,11 +466,11 @@ class RetrievalService:
         )
 
 
-            return answer, citations
+            return answer, citations, generated_sql
 
         except Exception:
             logger.exception("Hybrid retrieval failed")
-            return "Hybrid retrieval unavailable", []
+            return "Hybrid retrieval unavailable", [], None
 
     def _compose_answer(self, query: str, contexts: list[str]) -> str:
         openai_client = get_openai_client()

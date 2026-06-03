@@ -68,6 +68,7 @@ class QueryResponse(BaseModel):
 	mode_used: RetrievalMode
 	citations: list[Citation] = Field(default_factory=list)
 	latency_ms: int
+	generated_sql: str | None = None
 
 
 class ErrorResponse(BaseModel):
