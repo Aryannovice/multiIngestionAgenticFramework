@@ -1,11 +1,12 @@
 from __future__ import annotations
-
+# from retrieval.cache import RedisCache
 import json
 import logging
+from pydoc import doc
 import re
 import struct
 import time
-
+from concurrent.futures import ThreadPoolExecutor
 import pyodbc
 from azure.search.documents.models import VectorizedQuery
 
@@ -25,31 +26,57 @@ class RetrievalService:
     def __init__(self) -> None:
         self.settings = get_settings()
         self.embedding_service = EmbeddingService()
-
+        # self.cache = RedisCache()
     
 
     def answer(self, request: QueryRequest, mode: RetrievalMode) -> QueryResponse:
-        start = time.perf_counter()
+        overall_start = time.perf_counter()
         generated_sql = None
         citations = None
         
         try:
+            timings = {
+            "embed": 0,
+            "search": 0,
+            "sql_gen": 0,
+            "sql_exec": 0,
+            "generation": 0,
+        }
             
             if mode == RetrievalMode.SEMANTIC:
+                search_start = time.perf_counter()
                 contexts, citations = self._semantic_retrieval(request)
+                timings["search"] = int((time.perf_counter() - search_start) * 1000)
+
+            
+                generation_start = time.perf_counter()
                 answer = self._compose_answer(request.query, contexts)
+                timings["generation"] = int((time.perf_counter() - generation_start) * 1000)
+                
             elif mode == RetrievalMode.STRUCTURED:
+                sql_gen_start = time.perf_counter()
                 contexts, citations, generated_sql = self._structured_retrieval(request)
+                timings["sql_gen"] = int((time.perf_counter() - sql_gen_start) * 1000)
+
+                generation_start = time.perf_counter()
                 answer = self._compose_answer(request.query, contexts)
+                timings["generation"] = int((time.perf_counter() - generation_start) * 1000)
+                
             else:
+                hybrid_start = time.perf_counter()
                 answer, citations, generated_sql = self._hybrid_retrieval(request)
+                timings["hybrid"] = int((time.perf_counter() - hybrid_start) * 1000)
 
-            latency_ms = int((time.perf_counter() - start) * 1000)
+            latency_ms = int((time.perf_counter() - overall_start) * 1000)
 
+            logger.info(
+            " total=%dms",
+            latency_ms,
+        )
             tracker.log_metrics(
-                {"query_latency_ms": float(latency_ms)},
-                tags={"mode": mode.value},
-            )
+            {"query_latency_ms": float(latency_ms)},
+            tags={"mode": mode.value},
+        )
             
 
             return QueryResponse(
@@ -63,9 +90,88 @@ class RetrievalService:
         except Exception as exc:
             logger.exception("Retrieval failed")
             raise RuntimeError("Retrieval failed") from exc
+    def _rerank_results(self, query : str, results: list, top_n: int = 5,):
+        """lightweight re ranker"""
+
+        if not results:
+            return []
+        
+        openai_client = get_openai_client()
+
+        if openai_client is None:
+            return results[:top_n]
+        
+        text_blocks = []
+
+        for idx, doc in enumerate(results, start = 1):
+            content = doc.get("content", "")
+            if len(content) > 1200:
+                content = content[:1200]
+            text_blocks.append(f"Result {idx}:\n{content}")
+
+        prompt = f"""
+        Query: {query}
+
+        Below are retreived chunks.
+        Rank them from MOST relevant to LEAST relevant.
+
+        Return only a comma separated list of chunk numbers.
+
+        Example:
+        3,1,5,2,4
+
+        Chunks:
+        {chr(10).join(text_blocks)}
+        """
+
+        try:
+            response = openai_client.chat.completions.create(
+                model=self.settings.azure_openai_chat_deployment,
+                messages=[
+                    {
+                        "role": "user", "content":( "You are a retrieval re ranker. Return only chunk numbers"),
+                     },
+                     {
+                         "role" : "user",
+                         "content" : prompt
+                     },
+                ],
+                temperature = 0,
+                max_tokens = 50,
+            )
+
+            ranking_text = response.choices[0].message.content.strip()
+
+            ranked_indices = []
+
+            for token in ranking_text.split(","):
+                token = token.strip()
+
+                if token.isdigit():
+                    ranked_indices.append(int(token))
+
+            reranked = []
+
+            for idx in ranked_indices:
+                if 1 <= idx <= len(results):
+                    reranked.append(results[idx-1])
+
+            if not reranked:
+                return results[:top_n]
+            
+            return reranked[:top_n]
+        
+        except Exception:
+            logger.exception("Re ranking failed, returning original order")
+            return results[:top_n]
+
+        except Exception as e:
+            logger.exception("Failed to create chat completion")
+            raise RuntimeError("Failed to create chat completion") from e
 
     def _semantic_retrieval(self, request: QueryRequest) -> tuple[list[str], list[Citation]]:
         try:
+            
             index_name = resolve_docs_index_name()
             search_client = get_search_client(index_name)
 
@@ -98,9 +204,13 @@ class RetrievalService:
 
             if text_field is None:
                 return ["Semantic retrieval unavailable"], []
-
+            
+            embed_start = time.perf_counter()
             query_vectors = self.embedding_service.generate_embeddings([request.query])
+            embed_ms = int((time.perf_counter() - embed_start) * 1000)
+            logger.info("Generated query embedding in %d ms", embed_ms)
 
+            search_start = time.perf_counter()
             if query_vectors and vector_field:
                 target_dimensions = resolve_vector_dimensions(index_name)
                 query_vector = self.embedding_service._align_vector(query_vectors[0], target_dimensions)
@@ -121,17 +231,39 @@ class RetrievalService:
                     search_text=request.query,
                     top=request.top_k,
                 )
+            results = list(results)
+            results = self._rerank_results(request.query, results, top_n = 5)
+            search_ms = int((time.perf_counter() - search_start) * 1000)
+            logger.info("Executed search in %d ms and got %d results", search_ms, len(results))
+
+            
+
+            processs_start = time.perf_counter()
+            def process_job(doc):
+                source = doc.get(source_field, "")
+                passage = doc.get(text_field, "Unknown")
+
+                if passage:
+                    return f"PDF Context:\n{passage}", Citation(source=source, reference=source)
+                else:
+                    return None, None
 
             contexts: list[str] = []
             citations: list[Citation] = []
 
-            for doc in results:
-                passage = str(doc.get(text_field, ""))
-                source = str(doc.get(source_field, "unknown"))
+            # result_list = list(results)
 
-                if passage:
-                    contexts.append(f"PDF Context:\n{passage}")
-                    citations.append(Citation(source=source, reference=source))
+            # max_workers = min(15, len(result_list))
+
+            with ThreadPoolExecutor(max_workers = 15) as executor:
+                for result in executor.map(process_job, results):
+                    if result:
+                        ctx, cix = result
+                        contexts.append(ctx)
+                        citations.append(cix)
+
+            process_ms = int((time.perf_counter() - processs_start) * 1000)
+            logger.info("Processed search results in %d ms", process_ms)
 
             return contexts, citations
 
@@ -140,6 +272,11 @@ class RetrievalService:
             return ["Semantic retrieval unavailable"], []
 
     def _generate_sql(self, question: str) -> str:
+        # cached = self.cache.get("sql", question)
+        # if cached:
+        #     logger.info("Cache hit for SQL generation")
+        #     return cached
+        
         openai_client = get_openai_client()
         deployment = self.settings.azure_openai_chat_deployment
 
@@ -224,6 +361,8 @@ class RetrievalService:
         sql = sql.replace("```sql", "").replace("```", "").strip()
 
         logger.info("Generated SQL: %s", sql)
+        # self.cache.set("sql", question, sql)
+        logger.info("Cached SQL generation result")
         return sql
     
     def _validate_sql_query(self, sql:str)->None:
@@ -299,23 +438,27 @@ class RetrievalService:
             if self._looks_like_sql(query):
                 sql_query = query
             else:
+                sql_gen_start = time.perf_counter()
                 sql_query = self._generate_sql(query)
                 sql_query = self._normalize_sql_columns(sql_query)
                 logger.info("=" * 80)
                 logger.info("user query: %s", query)
                 logger.info("GENERATED SQL:\n%s", sql_query)
                 logger.info("=" *80)
-                
-
+                sql_gen_ms = int((time.perf_counter() - sql_gen_start) * 1000)
+                logger.info("Generated SQL in %d ms", sql_gen_ms)
+            sql_execute_start = time.perf_counter()
             rows = self._execute_fabric_sql(sql_query)
-            
+            sql_execute_ms = int((time.perf_counter() - sql_execute_start) * 1000)
+            logger.info("Executed SQL in %d ms", sql_execute_ms)
 
             if not rows:
-                return ["No structured data found"], []
+                return ["No structured data found"], [], sql_query
 
             contexts: list[str] = []
 
-            for row in rows[:20]:
+            def format_row(row: dict) -> str:
+
                 startup = row.get("startupname", "Unknown")
                 investor = row.get("investorsname", "Unknown")
                 amount = row.get("amount", "Unknown")
@@ -323,23 +466,27 @@ class RetrievalService:
                 city = row.get("citylocation", "Unknown")
                 subvertical = row.get("subvertical", "Unknown")
                 if not subvertical or subvertical.lower() == "nan":
-                    subvertical = "Unknown"
+                   
+                   subvertical = "Unknown"
                 investment_type = row.get("investmenttype", "Unknown")
                 date = row.get("date", "Unknown")
 
-                formatted = (
-                    f"Startup: {startup}\n"
-                    f"Investor: {investor}\n"
-                    f"Industry: {industry}\n"
-                    f"City: {city}\n"
-                    f"Funding Amount: {amount}\n"
-                    f"Subvertical: {subvertical}\n"
-                    f"Investment Type: {investment_type}\n"
-                    f"Date: {date}\n"
-                )
+            
 
-                contexts.append(formatted)
+                formatted = (
+                f"Startup: {startup}\n"
+                f"Investor: {investor}\n"
+                f"Industry: {industry}\n"
+                f"City: {city}\n"
+                f"Funding Amount: {amount}\n"
+                f"Subvertical: {subvertical}\n"
+                f"Investment Type: {investment_type}\n"
+                f"Date: {date}\n"
+            )
                 logger.info("structured is %s", formatted)
+                return formatted
+            
+            contexts = [format_row(row) for row in rows[:45]]
 
             citations = [
                 Citation(
@@ -352,7 +499,7 @@ class RetrievalService:
 
         except Exception:
             logger.exception("Structured retrieval failed")
-            return ["Sql retrieval failed , No data unavailable"], []
+            return ["Sql retrieval failed , No data unavailable"], [], None
 
     def _looks_like_sql(self, query: str) -> bool:
         return bool(re.match(r"^\s*select\s+", query, flags=re.IGNORECASE))
@@ -364,8 +511,10 @@ class RetrievalService:
             raise RuntimeError("Only SELECT statements are allowed")
 
         driver = self._resolve_sql_driver()
-
+        token_start = time.perf_counter()
         token = get_credential().get_token("https://database.windows.net/.default")
+        toekn_recieved = int((time.perf_counter() - token_start) * 1000)
+        logger.info("Acquired SQL access token in %d ms", toekn_recieved)
         token_bytes = token.token.encode("utf-16-le")
         token_struct = struct.pack(f"<I{len(token_bytes)}s", len(token_bytes), token_bytes)
         attrs_before = {1256: token_struct}  # SQL_COPT_SS_ACCESS_TOKEN
@@ -376,8 +525,11 @@ class RetrievalService:
             f"Database={self.settings.fabric_sql_database};"
             "Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;"
         )
-        
+        pyodbc_connect_start = time.perf_counter()
         with pyodbc.connect(conn_str, attrs_before=attrs_before) as conn:
+            pyodbc_connect_ms = int((time.perf_counter() - pyodbc_connect_start) * 1000)
+            logger.info("Connected to SQL in %d ms", pyodbc_connect_ms)
+            query_ms = time.perf_counter()
             with conn.cursor() as cursor:
                 self._validate_sql_query(query)
                 
@@ -386,6 +538,8 @@ class RetrievalService:
                     return []
                 columns = [col[0] for col in cursor.description]
                 rows = cursor.fetchmany(50)
+                query_returned_ms = int((time.perf_counter() - query_ms) * 1000)
+                logger.info("SQL query executed and returned in %d ms", query_returned_ms)
                 logger.info("SQL returned %d rows", len(rows))
                 if rows:
                     logger.info("sample rows : %s", rows[0])
@@ -419,9 +573,13 @@ class RetrievalService:
             if requires_reasoning:
                semantic_request.top_k = 8
             else:
-               semantic_request.top_k = 3
-            semantic_contexts, semantic_citations = self._semantic_retrieval(semantic_request)
-            structured_contexts, structured_citations, generated_sql = self._structured_retrieval(request)
+               semantic_request.top_k = 4
+
+            with ThreadPoolExecutor(max_workers = 2) as executor:
+                future_semantic = executor.submit(self._semantic_retrieval, semantic_request)
+                future_structured = executor.submit(self._structured_retrieval, request)
+            semantic_contexts, semantic_citations = future_semantic.result()
+            structured_contexts, structured_citations, generated_sql = future_structured.result()
 
 
 
@@ -473,6 +631,7 @@ Prioritize SQL structured records.
             return "Hybrid retrieval unavailable", [], None
 
     def _compose_answer(self, query: str, contexts: list[str]) -> str:
+        generation_start = time.perf_counter()
         openai_client = get_openai_client()
         deployment = self.settings.azure_openai_chat_deployment
         if openai_client is None or not deployment:
@@ -481,6 +640,7 @@ Prioritize SQL structured records.
         try:
             context_text = "\n\n".join(contexts[:8])
             logger.info("compose answer with %d contexts and %d chars", len(contexts), len(context_text))
+            
             completion = openai_client.chat.completions.create(
                 model=deployment,
                 messages = [
@@ -520,6 +680,8 @@ Prioritize SQL structured records.
                 deployment,
                 len(contexts),
             )
+            generation_ms = (int((time.perf_counter()-generation_start) *1000))
+            logger.info("Generated answer in %d ms", generation_ms)
 
             return response_text
         except Exception:

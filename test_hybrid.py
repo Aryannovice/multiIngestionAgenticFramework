@@ -42,19 +42,19 @@ if __name__ == "__main__":
     # SEMANTIC TEST
     # -------------------------
 
-    run_test(
-        query="What is financial analysis?",
-        mode=RetrievalMode.SEMANTIC,
-    )
+    # run_test(
+    #     query="What is financial analysis?",
+    #     mode=RetrievalMode.SEMANTIC,
+    # )
 
     # -------------------------
     # STRUCTURED TEST
     # -------------------------
 
-    run_test(
-        query="Which startups received funding from Tiger Global?",
-        mode=RetrievalMode.STRUCTURED,
-    )
+    # run_test(
+    #     query="Which startups received funding from Tiger Global?",
+    #     mode=RetrievalMode.STRUCTURED,
+    # )
 
     # -------------------------
     # HYBRID TEST
