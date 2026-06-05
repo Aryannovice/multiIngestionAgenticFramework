@@ -90,6 +90,84 @@ class RetrievalService:
         except Exception as exc:
             logger.exception("Retrieval failed")
             raise RuntimeError("Retrieval failed") from exc
+    def _rerank_results(self, query : str, results: list, top_n: int = 5,):
+        """lightweight re ranker"""
+
+        if not results:
+            return []
+        
+        openai_client = get_openai_client()
+
+        if openai_client is None:
+            return results[:top_n]
+        
+        text_blocks = []
+
+        for idx, doc in enumerate(results, start = 1):
+            content = doc.get("content", "")
+            if len(content) > 1200:
+                content = content[:1200]
+            text_blocks.append(f"Result {idx}:\n{content}")
+
+        prompt = f"""
+        Query: {query}
+
+        Below are retreived chunks.
+        Rank them from MOST relevant to LEAST relevant.
+
+        Return only a comma separated list of chunk numbers.
+
+        Example:
+        3,1,5,2,4
+
+        Chunks:
+        {chr(10).join(text_blocks)}
+        """
+
+        try:
+            response = openai_client.chat.completions.create(
+                model=self.settings.azure_openai_chat_deployment,
+                messages=[
+                    {
+                        "role": "user", "content":( "You are a retrieval re ranker. Return only chunk numbers"),
+                     },
+                     {
+                         "role" : "user",
+                         "content" : prompt
+                     },
+                ],
+                temperature = 0,
+                max_tokens = 50,
+            )
+
+            ranking_text = response.choices[0].message.content.strip()
+
+            ranked_indices = []
+
+            for token in ranking_text.split(","):
+                token = token.strip()
+
+                if token.isdigit():
+                    ranked_indices.append(int(token))
+
+            reranked = []
+
+            for idx in ranked_indices:
+                if 1 <= idx <= len(results):
+                    reranked.append(results[idx-1])
+
+            if not reranked:
+                return results[:top_n]
+            
+            return reranked[:top_n]
+        
+        except Exception:
+            logger.exception("Re ranking failed, returning original order")
+            return results[:top_n]
+
+        except Exception as e:
+            logger.exception("Failed to create chat completion")
+            raise RuntimeError("Failed to create chat completion") from e
 
     def _semantic_retrieval(self, request: QueryRequest) -> tuple[list[str], list[Citation]]:
         try:
@@ -153,8 +231,8 @@ class RetrievalService:
                     search_text=request.query,
                     top=request.top_k,
                 )
-
             results = list(results)
+            results = self._rerank_results(request.query, results, top_n = 5)
             search_ms = int((time.perf_counter() - search_start) * 1000)
             logger.info("Executed search in %d ms and got %d results", search_ms, len(results))
 
@@ -493,9 +571,9 @@ class RetrievalService:
             semantic_request = request.model_copy()
 
             if requires_reasoning:
-               semantic_request.top_k = 2
+               semantic_request.top_k = 8
             else:
-               semantic_request.top_k = 1
+               semantic_request.top_k = 4
 
             with ThreadPoolExecutor(max_workers = 2) as executor:
                 future_semantic = executor.submit(self._semantic_retrieval, semantic_request)
