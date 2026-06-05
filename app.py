@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+from fastapi.responses import StreamingResponse
 import logging
 import time
 from contextlib import asynccontextmanager
@@ -94,3 +94,43 @@ async def query(request: QueryRequest) -> QueryResponse:
 	except Exception as exc:
 		logger.exception("Query execution failed")
 		raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/query/stream")
+async def query_stream(request: QueryRequest):
+
+    mode = router.classify(request)
+
+    if mode.name == "SEMANTIC":
+
+        contexts, _ = retrieval_service._semantic_retrieval(request)
+
+        return StreamingResponse(
+            retrieval_service._compose_answer_stream(
+                request.query,
+                contexts,
+            ),
+            media_type="text/event-stream",
+        )
+
+    elif mode.name == "STRUCTURED":
+
+        contexts, _, _ = retrieval_service._structured_retrieval(request)
+
+        return StreamingResponse(
+            retrieval_service._compose_answer_stream(
+                request.query,
+                contexts,
+            ),
+            media_type="text/event-stream",
+        )
+
+    else:
+
+        return StreamingResponse(
+            retrieval_service._hybrid_retrieval_stream(
+                request,
+            ),
+            media_type="text/event-stream",
+        )
+										   

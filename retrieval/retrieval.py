@@ -7,6 +7,9 @@ import re
 import struct
 import time
 from concurrent.futures import ThreadPoolExecutor
+import token
+from flask import ctx
+from flask import ctx
 import pyodbc
 from azure.search.documents.models import VectorizedQuery
 
@@ -129,7 +132,7 @@ class RetrievalService:
                 model=self.settings.azure_openai_chat_deployment,
                 messages=[
                     {
-                        "role": "user", "content":( "You are a retrieval re ranker. Return only chunk numbers"),
+                        "role": "user", "content":( "You are a retrieval reranker. Return only chunk numbers."),
                      },
                      {
                          "role" : "user",
@@ -144,11 +147,9 @@ class RetrievalService:
 
             ranked_indices = []
 
-            for token in ranking_text.split(","):
-                token = token.strip()
-
-                if token.isdigit():
-                    ranked_indices.append(int(token))
+            ranked_indices = [
+                int(x) for x in re.findall(r"\d+", ranking_text)
+            ]
 
             reranked = []
 
@@ -589,9 +590,17 @@ class RetrievalService:
             if requires_reasoning:
                
                synthesis_hint = """
-The user is asking for reasoning/explanation.
-Use PDF semantic context heavily for WHY/HOW analysis.
-Use SQL records for factual support only.
+Use SQL records as the primary source of factual information.
+
+If SQL records contain funding amounts, investors, dates, or startup names,
+those values take precedence over all other context.
+
+Use PDF context only to explain business reasoning or industry background.
+
+Do not infer investment amounts that are not explicitly stated.
+
+If multiple investors are listed in a funding round,
+do not attribute the entire funding amount to a single investor.
 """
             else:
                
@@ -629,6 +638,114 @@ Prioritize SQL structured records.
         except Exception:
             logger.exception("Hybrid retrieval failed")
             return "Hybrid retrieval unavailable", [], None
+        
+    def _hybrid_retrieval_stream(self, request: QueryRequest):
+        try:
+
+            reasoning_keywords = [
+                "why",
+                "reason",
+                "explain",
+                "compare",
+                "difference",
+                "vs ",
+                "versus ",
+            ]
+            requires_reasoning = any(keyword in request.query.lower() for keyword in reasoning_keywords)
+            semantic_request = request.model_copy()
+
+            if requires_reasoning:
+               semantic_request.top_k = 8
+            else:
+               semantic_request.top_k = 4
+
+            with ThreadPoolExecutor(max_workers = 2) as executor:
+                future_semantic = executor.submit(self._semantic_retrieval, semantic_request)
+                future_structured = executor.submit(self._structured_retrieval, request)
+            semantic_contexts, semantic_citations = future_semantic.result()
+            structured_contexts, structured_citations, generated_sql = future_structured.result()
+
+
+
+            semantic_text = "\n\n".join(semantic_contexts)
+            structured_text = "\n\n".join(structured_contexts)
+
+            if requires_reasoning:
+               
+               synthesis_hint = """
+Use SQL records as the primary source of factual information.
+
+If SQL records contain funding amounts, investors, dates, or startup names,
+those values take precedence over all other context.
+
+Use PDF context only to explain business reasoning or industry background.
+
+Do not infer investment amounts that are not explicitly stated.
+
+If multiple investors are listed in a funding round,
+do not attribute the entire funding amount to a single investor.
+"""
+            else:
+               
+               synthesis_hint = """
+The user is asking primarily for factual business data.
+Prioritize SQL structured records.
+
+
+"""
+
+            logger.info("Structured contexts:")
+            for ctx in structured_contexts[:3]:
+               
+               logger.info(ctx)
+            combined_context = f"""
+
+            {synthesis_hint}
+            PDF SEMANTIC CONTEXT:
+
+            {semantic_text}
+
+            STRUCTURED SQL RECORDS:
+            {structured_text}
+          """
+            logger.info("=" * 80)
+            logger.info("COMBINED CONTEXT")
+            logger.info(combined_context)
+            logger.info("=" * 80)
+
+            logger.info(
+    "Hybrid stream got %d semantic citations and %d structured citations",
+    len(semantic_citations),
+    len(structured_citations),
+)
+            
+            logger.info(
+    "Generated SQL for stream:\n%s",
+    generated_sql,
+
+
+)
+            
+            logger.info(
+    "Sending %d semantic contexts and %d structured contexts to LLM",
+    len(semantic_contexts),
+    len(structured_contexts),
+)
+            
+            yield "\n=== GENERATED SQL ===\n"
+
+            yield generated_sql
+
+            yield "\n\n=== ANSWER ===\n\n"
+
+            for token in self._compose_answer_stream( request.query,[combined_context], ):
+                
+                yield token
+        
+        except Exception:
+            logger.exception("Hybrid retrieval failed")
+            return iter(["Hybrid retrieval unavailable"])
+
 
     def _compose_answer(self, query: str, contexts: list[str]) -> str:
         generation_start = time.perf_counter()
@@ -670,7 +787,7 @@ Prioritize SQL structured records.
 			
 ],
 			
-                max_tokens=600,
+                max_tokens=250,
                 temperature=0.1,
             )
             response_text = completion.choices[0].message.content.strip()
@@ -687,6 +804,101 @@ Prioritize SQL structured records.
         except Exception:
             logger.exception("OpenAI synthesis failed; returning context fallback")
             return f"Unable to synthesize with model. Retrieved {len(contexts)} context chunks."
+        
+
+    def _compose_answer_stream(self, query: str, contexts: list[str]):
+        openai_client = get_openai_client()
+
+        if openai_client is None:
+            yield "Model Unavailable"
+            return 
+        
+        context_text = "\n\n".join(contexts[:8])
+        stream_start = time.perf_counter()
+        first_token = None
+
+        
+
+        stream = openai_client.chat.completions.create(
+            model = self.settings.azure_openai_chat_deployment,
+            messages = [
+                {
+                    "role":"system",
+                    "content":(
+                        "You are an enterprise hybrid retrieval assistant.\n\n"
+
+            "You receive:\n"
+            "1. PDF semantic context\n"
+            "2. Structured SQL business records\n\n"
+
+            "CRITICAL RULES:\n"
+
+            "- Structured SQL records are the authoritative source for factual data.\n"
+            "- Preserve startup name, city, date, amount, industry, subvertical, investor names, and investment type exactly as provided.\n"
+            "- Never modify funding amounts.\n"
+            "- Never convert currencies.\n"
+            "- Never infer missing investor-specific contributions.\n"
+            "- If multiple investors are listed, do not attribute the full funding amount to a single investor.\n"
+            "- If information is unavailable, explicitly say so.\n"
+            "- Use PDF context only for industry background, explanation, or reasoning.\n"
+            "- Do not hallucinate facts not present in the retrieved context.\n"
+            "- When answering funding questions, first present the retrieved SQL facts, then provide explanation if relevant.\n"
+            "- Do not speculate about business motivations unless explicitly stated in the context.\n"
+                    ),
+                },
+                {
+                    "role":"user",
+                        "content": f"Question: {query}\n\nContext:\n{context_text}",
+                },
+            ],
+            temperature = 0.1,
+            stream = True,
+
+        )
+
+        
+
+        buffer = ""
+        last_token_time = time.perf_counter()
+        for chunk in stream:
+
+            if not chunk.choices:
+                print("EMPTY CHOICES EVENT")
+                continue
+            # print(repr(chunk))
+
+            delta = chunk.choices[0].delta
+            # print("DELTA:", delta)
+            # print(repr(chunk))
+            if delta and delta.content:
+
+                if first_token is None:
+                   
+                    
+                   first_token = time.perf_counter()
+                   logger.info(
+                f"First token latency: {(first_token - stream_start)*1000:.0f} ms"
+            )
+                   
+                current = time.perf_counter()
+                gap_ms = (current - last_token_time) * 1000
+                if gap_ms > 500:
+                   
+                   logger.info(f"Large token gap: {gap_ms:.0f} ms")
+                   last_token_time = current
+
+                logger.info(
+            "TOKEN CHUNK ARRIVED %s",
+            time.perf_counter()
+        )
+                buffer += delta.content
+#                 logger.info(
+#     "CHUNK: %s",
+#     repr(delta.content)
+# )
+                if len(buffer) > 30:
+                   yield buffer
+                   buffer = ""
 
 
 retrieval_service = RetrievalService()
