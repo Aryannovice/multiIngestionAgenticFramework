@@ -887,10 +887,10 @@ Prioritize SQL structured records.
                    logger.info(f"Large token gap: {gap_ms:.0f} ms")
                    last_token_time = current
 
-                logger.info(
-            "TOKEN CHUNK ARRIVED %s",
-            time.perf_counter()
-        )
+        #         logger.info(
+        #     "TOKEN CHUNK ARRIVED %s",
+        #     time.perf_counter()
+        # )
                 buffer += delta.content
 #                 logger.info(
 #     "CHUNK: %s",

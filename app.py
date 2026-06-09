@@ -1,4 +1,5 @@
 from __future__ import annotations
+import uuid
 from fastapi.responses import StreamingResponse
 import logging
 import time
@@ -6,6 +7,9 @@ from contextlib import asynccontextmanager
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
+from httpcore import request
+from httpcore import request
+from sqlalchemy import exc
 
 from config.settings import get_settings
 from ingestion.ingestion import ingestion_service
@@ -14,6 +18,9 @@ from retrieval.retrieval import retrieval_service
 from retrieval.router import router
 from utils.utils import setup_logging
 import asyncio
+# from memory.context_builder import ContextBuilder
+from memory.session_store import session_manager
+	
 
 settings = get_settings()
 setup_logging(settings.log_level)
@@ -87,50 +94,100 @@ async def get_ingestion_job(job_id: str) -> IngestionJobStatusResponse:
 
 
 @app.post("/query", response_model=QueryResponse)
-async def query(request: QueryRequest) -> QueryResponse:
-	try:
-		mode = router.classify(request)
-		return retrieval_service.answer(request, mode)
-	except Exception as exc:
-		logger.exception("Query execution failed")
-		raise HTTPException(status_code=500, detail=str(exc)) from exc
+async def query(request: QueryRequest):
+    try:
+        print("QUERY ENDPOINT HIT")
+
+        session_id = getattr(request, "session_id", None) or str(uuid.uuid4())
+        session = session_manager.get_or_create_session(session_id)
+        history = session.get_history()
+
+        logger.info("SESSION=%s | HISTORY_SIZE=%d", session_id, len(history))
+        logger.info("HISTORY_CONTENT=%s", history)
+
+        mode = router.classify(request, history)
+        response = retrieval_service.answer(request, mode)
+
+        logger.info(f"Response content: {response}")
+
+        session.append_history(request.query, response.answer)
+        return response
+    except Exception as exc:
+        logger.exception("Query execution failed")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+
+
+
 
 
 @app.post("/query/stream")
 async def query_stream(request: QueryRequest):
+    try:
+        print("QUERY_STREAM HIT")
 
-    mode = router.classify(request)
+        session_id = getattr(request, "session_id", None) or str(uuid.uuid4())
+        print("SESSION_ID =", session_id)
 
-    if mode.name == "SEMANTIC":
+        history = session_manager.get_history(session_id)
 
-        contexts, _ = retrieval_service._semantic_retrieval(request)
+        logger.info(
+            "SESSION=%s | HISTORY_SIZE=%d",
+            session_id,
+            len(history),
+        )
 
-        return StreamingResponse(
-            retrieval_service._compose_answer_stream(
+        mode = router.classify(request, history)
+
+        if mode.name == "SEMANTIC":
+            contexts, _ = retrieval_service._semantic_retrieval(request)
+            stream = retrieval_service._compose_answer_stream(
                 request.query,
                 contexts,
-            ),
-            media_type="text/event-stream",
-        )
+            )
 
-    elif mode.name == "STRUCTURED":
-
-        contexts, _, _ = retrieval_service._structured_retrieval(request)
-
-        return StreamingResponse(
-            retrieval_service._compose_answer_stream(
+        elif mode.name == "STRUCTURED":
+            contexts, _, _ = retrieval_service._structured_retrieval(request)
+            stream = retrieval_service._compose_answer_stream(
                 request.query,
                 contexts,
-            ),
-            media_type="text/event-stream",
-        )
+            )
 
-    else:
+        else:
+            stream = retrieval_service._hybrid_retrieval_stream(request)
+
+        def memory_stream():
+            full_response = []
+
+            for chunk in stream:
+                full_response.append(chunk)
+                yield chunk
+
+            final_answer = "".join(full_response)
+
+            session_manager.append(
+                session_id=session_id,
+                query=request.query,
+                response=final_answer,
+            )
+
+            logger.info(
+                "SESSION SAVED | SESSION=%s | HISTORY_SIZE=%d",
+                session_id,
+                len(session_manager.get_history(session_id)),
+            )
 
         return StreamingResponse(
-            retrieval_service._hybrid_retrieval_stream(
-                request,
-            ),
+            memory_stream(),
             media_type="text/event-stream",
         )
+
+    except Exception as exc:
+        logger.exception("Query stream execution failed")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+
+
 										   
