@@ -167,25 +167,95 @@ FABRICSQLCONNECTION_STRING=
 # Architecture Overview
 
 ```text
-Azure Blob Storage (RAW)
-        ↓
-Multi-Source Ingestion
-        ↓
-Specialized Processing
-    ├── PDF Chunking
-    ├── CSV Cleaning
-    └── SQL Processing
-        ↓
-Silver Layer (Lakehouse)
-        ↓
-Embeddings + Metadata
-        ↓
-Azure AI Search
-        ↓
-Retrieval Router
-        ↓
-Azure OpenAI Response Generation
+                           ┌─────────────────────┐
+                           │   User Query        │
+                           └──────────┬──────────┘
+                                      │
+                                      ▼
+                           ┌─────────────────────┐
+                           │ FastAPI API Layer   │
+                           └──────────┬──────────┘
+                                      │
+                                      ▼
+                           ┌─────────────────────┐
+                           │ Session Memory      │
+                           │ (Per Session)       │
+                           └──────────┬──────────┘
+                                      │
+                                      ▼
+                           ┌─────────────────────┐
+                           │ Query Rewriter      │
+                           │ Context Expansion   │
+                           └──────────┬──────────┘
+                                      │
+                                      ▼
+                    ┌─────────────────────────────────┐
+                    │      Retrieval Router           │
+                    └───────┬───────────────┬─────────┘
+                            │               │
+                            │               │
+                            ▼               ▼
+
+              ┌──────────────────┐   ┌──────────────────┐
+              │ Semantic Search  │   │ Structured SQL   │
+              │ Azure AI Search  │   │ Fabric SQL       │
+              └────────┬─────────┘   └────────┬─────────┘
+                       │                      │
+                       ▼                      ▼
+
+              ┌──────────────────┐   ┌──────────────────┐
+              │ Vector Results   │   │ SQL Results      │
+              └────────┬─────────┘   └────────┬─────────┘
+                       │                      │
+                       └──────────┬───────────┘
+                                  │
+                                  ▼
+
+                    ┌──────────────────────────┐
+                    │ Context Aggregator       │
+                    │ + Grounding Rules        │
+                    └────────────┬─────────────┘
+                                 │
+                                 ▼
+
+                    ┌──────────────────────────┐
+                    │ Azure OpenAI (GPT-4o)    │
+                    │ Streaming Response       │
+                    └────────────┬─────────────┘
+                                 │
+                                 ▼
+
+                    ┌──────────────────────────┐
+                    │ Final Answer + Citations │
+                    └──────────────────────────┘
 ```
+
+and the offline pipeline is 
+Azure Blob Storage
+        │
+        ▼
+Multi-Source Ingestion
+        │
+        ├── PDF Documents
+        ├── CSV Files
+        └── Structured SQL Data
+        │
+        ▼
+Processing Layer
+        │
+        ├── Chunking
+        ├── Cleaning
+        ├── Metadata Extraction
+        └── Validation
+        │
+        ▼
+Lakehouse (Silver Layer)
+        │
+        ▼
+Embedding Generation
+        │
+        ▼
+Azure AI Search Index
 
 ---
 
