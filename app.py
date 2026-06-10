@@ -4,7 +4,8 @@ from fastapi.responses import StreamingResponse
 import logging
 import time
 from contextlib import asynccontextmanager
-
+from copy import deepcopy
+from memory.query_rewriter import query_rewriter
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from httpcore import request
@@ -106,17 +107,22 @@ async def query(request: QueryRequest):
         logger.info("HISTORY_CONTENT=%s", history)
 
         mode = router.classify(request, history)
-        response = retrieval_service.answer(request, mode)
+        rewritten_query = query_rewriter.rewrite_query(request.query, history)
+        logger.info("original_query=%s | rewritten_query=%s", request.query, rewritten_query)
+
+        rewritten_request = deepcopy(request)
+        rewritten_request.query = rewritten_query
+
+        response = retrieval_service.answer(rewritten_request, mode)
 
         logger.info(f"Response content: {response}")
 
         session.append_history(request.query, response.answer)
         return response
+
     except Exception as exc:
         logger.exception("Query execution failed")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-
 
 
 
@@ -139,23 +145,28 @@ async def query_stream(request: QueryRequest):
         )
 
         mode = router.classify(request, history)
+        rewritten_query = query_rewriter.rewrite_query(request.query, history)
+        logger.info("original_query=%s | rewritten_query=%s", request.query, rewritten_query)
+
+        rewritten_request = deepcopy(request)
+        rewritten_request.query = rewritten_query
 
         if mode.name == "SEMANTIC":
-            contexts, _ = retrieval_service._semantic_retrieval(request)
+            contexts, _ = retrieval_service._semantic_retrieval(rewritten_request)
             stream = retrieval_service._compose_answer_stream(
-                request.query,
+                rewritten_request.query,
                 contexts,
             )
 
         elif mode.name == "STRUCTURED":
-            contexts, _, _ = retrieval_service._structured_retrieval(request)
+            contexts, _, _ = retrieval_service._structured_retrieval(rewritten_request)
             stream = retrieval_service._compose_answer_stream(
-                request.query,
+                rewritten_request.query,
                 contexts,
             )
 
         else:
-            stream = retrieval_service._hybrid_retrieval_stream(request)
+            stream = retrieval_service._hybrid_retrieval_stream(rewritten_request)
 
         def memory_stream():
             full_response = []
@@ -186,6 +197,7 @@ async def query_stream(request: QueryRequest):
     except Exception as exc:
         logger.exception("Query stream execution failed")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
 
 
 

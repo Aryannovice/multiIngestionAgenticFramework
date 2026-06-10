@@ -752,6 +752,10 @@ Prioritize SQL structured records.
         openai_client = get_openai_client()
         deployment = self.settings.azure_openai_chat_deployment
         if openai_client is None or not deployment:
+            logger.info(
+    "Embedding deployment=%s",
+    self.settings.azure_openai_embedding_deployment,
+)
             return f"No model endpoint configured yet. Query: {query}\nContext size: {len(contexts)}"
 
         try:

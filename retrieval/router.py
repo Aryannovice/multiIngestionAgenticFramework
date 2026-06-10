@@ -1,7 +1,7 @@
 # router.py
 print("\nROUTER MODULE LOADED\n")
 from models.schema import QueryRequest, RetrievalMode
-from memory.context_builder import ContextBuilder
+# from memory.context_builder import ContextBuilder
 import logging
 
 logger = logging.getLogger(__name__)
