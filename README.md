@@ -104,6 +104,12 @@ pip install spacy
 python -m spacy download en_core_web_sm
 ```
 
+for mlflow runs (i have added a demo mlflow based file which upon run would create mlruns/ with all the traceability and observability logs)
+'''bash
+python test_mlflow.py
+mlflow ui
+'''
+
 # Repository Structure
 
 ```text
@@ -126,6 +132,7 @@ ANAGENTICFRAMEWORK (MULTIAGENT)
 │   └── schema.py
 │
 ├── observability
+│   └──tracker.py
 │
 ├── retrieval
 │   ├── retrieval.py
@@ -142,10 +149,11 @@ ANAGENTICFRAMEWORK (MULTIAGENT)
 ├── README.md
 ├── requirements.txt
 │
-├── testcsvretrieval.py
-├── testfabricsql.py
-├── testhybrid.py
-└── testretrieval.py
+├── test_csv_retrieval.py
+├── test_fabric_sql.py
+├── test_hybrid.py
+├──test_mlflow.py
+├── test_retrieval.py
 ```
 
 ---
@@ -162,6 +170,10 @@ AZUREAISEARCHAPIKEY=
 AZUREAISEARCHINDEX=
 
 FABRICSQLCONNECTION_STRING=
+
+ENABLE_MLFLOW = true
+MLFLOW_TRACKING_URI= //BLANK IF LOCAL ELSE SPUN UP AZURE OR SO ENDPOINT MLFLOW URL
+MLFLOW_EXPERIMENT_NAME=retrieval-agent(OR YOUR NAME PREFERRED)
 ```
 
 ---
