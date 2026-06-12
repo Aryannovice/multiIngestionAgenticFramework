@@ -85,7 +85,6 @@ Each source follows its own preprocessing pipeline:
 * "Find startup trends from structured funding datasets."
 
 ---
-
 # Run Locally
 
 ```bash
@@ -98,9 +97,12 @@ Visit Swagger docs at:
 http://127.0.0.1:8000/docs
 ```
 
-(unless another port is configured)
+## Additional Setup
 
----
+```bash
+pip install spacy
+python -m spacy download en_core_web_sm
+```
 
 # Repository Structure
 

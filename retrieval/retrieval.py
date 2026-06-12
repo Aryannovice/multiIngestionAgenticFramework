@@ -16,7 +16,7 @@ from azure.search.documents.models import VectorizedQuery
 from config.settings import get_settings
 from embeddings.embeddings import EmbeddingService
 from models.schema import Citation, QueryRequest, QueryResponse, RetrievalMode
-from observability.mlflow_utils import tracker
+from observability.tracker import tracker
 from utils.azure_clients import get_credential, get_openai_client, get_search_client, get_search_index_client, resolve_docs_index_name, resolve_vector_dimensions
 
 
@@ -76,10 +76,12 @@ class RetrievalService:
             " total=%dms",
             latency_ms,
         )
-            tracker.log_metrics(
-            {"query_latency_ms": float(latency_ms)},
-            tags={"mode": mode.value},
-        )
+            tracker.set_tag("mode", mode.value)
+            for k, v in timings.items():
+                if v:
+                    tracker.record(f"{k}_latency_ms", float(v))
+            tracker.record("total_latency_ms", float(latency_ms))
+            tracker.flush(run_name = f"retrieval_{mode.value}")
             
 
             return QueryResponse(
@@ -209,7 +211,7 @@ class RetrievalService:
             embed_start = time.perf_counter()
             query_vectors = self.embedding_service.generate_embeddings([request.query])
             embed_ms = int((time.perf_counter() - embed_start) * 1000)
-            logger.info("Generated query embedding in %d ms", embed_ms)
+            tracker.info("generated query embedding in %d ms", embed_ms, metric = "embed_ms", value = float(embed_ms))
 
             search_start = time.perf_counter()
             if query_vectors and vector_field:
@@ -235,7 +237,8 @@ class RetrievalService:
             results = list(results)
             results = self._rerank_results(request.query, results, top_n = 5)
             search_ms = int((time.perf_counter() - search_start) * 1000)
-            logger.info("Executed search in %d ms and got %d results", search_ms, len(results))
+            tracker.info("executed search in %d ms", search_ms, metric = "search_ms", value = float(search_ms))
+            tracker.info("search result count: %d", len(results), metric = "search_result_count", value = float(len(results)))
 
             
 
@@ -264,7 +267,7 @@ class RetrievalService:
                         citations.append(cix)
 
             process_ms = int((time.perf_counter() - processs_start) * 1000)
-            logger.info("Processed search results in %d ms", process_ms)
+            tracker.info("Processed search results in %d ms", process_ms, metric = "process_ms", value = float(process_ms))
 
             return contexts, citations
 
@@ -880,14 +883,13 @@ Prioritize SQL structured records.
                    
                     
                    first_token = time.perf_counter()
-                   logger.info(
-                f"First token latency: {(first_token - stream_start)*1000:.0f} ms"
-            )
-                   
+                   ttfb_ms = int((first_token - stream_start) * 1000)
+                   tracker.info("Time to first token: %d ms", ttfb_ms, metric = "ttfb_ms", value = float(ttfb_ms))
+
                 current = time.perf_counter()
                 gap_ms = (current - last_token_time) * 1000
                 if gap_ms > 500:
-                   
+                   tracker.info("Large token gap: %d ms", gap_ms, metric = "gap_ms", value = float(gap_ms))
                    logger.info(f"Large token gap: {gap_ms:.0f} ms")
                    last_token_time = current
 

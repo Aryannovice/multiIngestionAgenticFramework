@@ -2,6 +2,7 @@ from functools import lru_cache
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from observability.tracker import tracker
 
 
 class Settings(BaseSettings):
@@ -44,8 +45,15 @@ class Settings(BaseSettings):
 
 	enable_mlflow: bool = Field(default=False, alias="ENABLE_MLFLOW")
 	mlflow_tracking_uri: str | None = Field(default=None, alias="MLFLOW_TRACKING_URI")
+	mlflow_experiment_name: str = Field(default="retrieval-agent", alias="MLFLOW_EXPERIMENT_NAME")
 
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-	return Settings()
+	settings = Settings()
+	tracker.configure(
+		enabled = settings.enable_mlflow,
+		tracking_uri = settings.mlflow_tracking_uri,
+		experiment_name = settings.mlflow_experiment_name,
+	)
+	return settings

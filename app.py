@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from httpcore import request
 from httpcore import request
 from sqlalchemy import exc
-
+from observability.tracker import tracker
 from config.settings import get_settings
 from ingestion.ingestion import ingestion_service
 from models.schema import ErrorResponse, IngestionJobResponse, IngestionJobStatusResponse, IngestionRequest, QueryRequest, QueryResponse
@@ -183,10 +183,15 @@ async def query_stream(request: QueryRequest):
                 response=final_answer,
             )
 
+            # Tracker calls placed correctly here
+            tracker.set_tag("request_way", mode.value)
+            tracker.set_tag("session_id", session_id)
+            tracker.record("response_length", float(len(final_answer)))
+
             logger.info(
-                "SESSION SAVED | SESSION=%s | HISTORY_SIZE=%d",
+                "Completed streaming response for SESSION=%s | RESPONSE_LENGTH=%d",
                 session_id,
-                len(session_manager.get_history(session_id)),
+                len(final_answer),
             )
 
         return StreamingResponse(
@@ -197,6 +202,7 @@ async def query_stream(request: QueryRequest):
     except Exception as exc:
         logger.exception("Query stream execution failed")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
 
 
 

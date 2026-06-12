@@ -149,6 +149,7 @@
 
 import logging
 from collections import deque
+from observability.tracker import tracker
 
 import spacy
 
@@ -327,6 +328,9 @@ REWRITTEN QUERY:
             query,
             rewritten_query,
         )
+
+        tracker.set_tag("query_rewritten", "true" if rewritten_query != query else "false")
+        tracker.record("query_rewrite_history_size", float(len(recent_history)))
 
         return rewritten_query
 

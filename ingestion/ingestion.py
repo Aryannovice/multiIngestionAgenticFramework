@@ -11,7 +11,7 @@ from pypdf import PdfReader
 from config.settings import get_settings
 from embeddings.embeddings import EmbeddingService
 from models.schema import IngestionJobResponse, IngestionJobStatusResponse, IngestionRequest, JobStatus, SourceType
-from observability.mlflow_utils import tracker
+from observability.tracker import tracker
 from utils.azure_clients import get_blob_service_client
 from utils.utils import generate_job_id, sha256_text, utc_now
 
