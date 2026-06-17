@@ -1,45 +1,35 @@
-print("\nSESSION_STORE MODULE LOADED\n")
 import uuid
 import logging
 
+from database.models import Session, Message
+
 logger = logging.getLogger(__name__)
 
+
 class SessionStore:
-
-    
-
     def __init__(self, session_id: str):
-        
         self.session_id = session_id
         self.history = []
 
     def get_history(self):
-        print("GET_HISTORY CALLED")
         return self.history
 
     def append_history(self, query: str, response: str):
-        print("APPEND_HISTORY CALLED")
         logger.info(
-       "APPENDING TO SESSION=%s | QUERY=%s",
-    self.session_id,
-    query,
-)
-        
-        
-        self.history.append(
-            {
-                "query": query,
-                "response": response,
-            }
-        )
+            "APPENDING TO SESSION=%s | QUERY=%s", self.session_id, query
+            )
 
+        turn_index = len(self.history)
+        Message.insert(
+            self.session_id, f"Q: {query} | A: {response}", turn_index
+            )
+
+        self.history.append({
+            "query": query, "response": response
+            })
         logger.info(
-    "NEW HISTORY SIZE=%d",
-    len(self.history),
-)
-
-        print("APPEND HISTORY CALLED")
-        print(self.history)
+            "NEW HISTORY SIZE=%d", len(self.history)
+            )
 
     def clear_history(self):
         self.history.clear()
@@ -53,8 +43,26 @@ class SessionManager:
         session_id = session_id or str(uuid.uuid4())
 
         if session_id not in self.sessions:
-            self.sessions[session_id] = SessionStore(session_id)
+            # check DB first before creating
+            existing = Session.get_by_id(session_id)
+            if not existing:
+                Session.create(session_id)
+            
+            store = SessionStore(session_id)
 
+            # load history from DB into memory
+            rows = Message.get_by_session(session_id)
+            if rows:
+                for row in rows:
+                    raw = row[3]  # content column
+                    # stored as "Q: ... | A: ..."
+                    if "| A: " in raw:
+                        q, a = raw.split("| A: ", 1)
+                        store.history.append({"query": q[3:], "response": a})
+
+            self.sessions[session_id] = store
+
+        Session.update_last_active(session_id)
         return self.sessions[session_id]
 
     def get_history(self, session_id: str):

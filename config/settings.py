@@ -1,9 +1,11 @@
 from functools import lru_cache
-
+import os
+from dotenv import load_dotenv
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from observability.tracker import tracker
 
+load_dotenv()
 
 class Settings(BaseSettings):
 	model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
@@ -39,6 +41,10 @@ class Settings(BaseSettings):
 		default=None, alias="AZURE_OPENAI_EMBEDDING_DEPLOYMENT"
 	)
 
+	
+	##DATABASE_URL
+	##db_url: str = Field(default='postgresql://ayush:a1b2c3@localhost:5432/agenticframeworkdb', alias="DATABASE_URL")
+
 	fabric_sql_server: str = Field(default="", alias="FABRIC_SQL_SERVER")
 	fabric_sql_database: str = Field(default="", alias="FABRIC_SQL_DATABASE")
 	fabric_sql_driver: str = Field(default="ODBC Driver 18 for SQL Server", alias="FABRIC_SQL_DRIVER")
@@ -47,6 +53,7 @@ class Settings(BaseSettings):
 	mlflow_tracking_uri: str | None = Field(default=None, alias="MLFLOW_TRACKING_URI")
 	mlflow_experiment_name: str = Field(default="retrieval-agent", alias="MLFLOW_EXPERIMENT_NAME")
 
+db_url = 'postgresql://ayush:a1b2c3@localhost:5432/agenticframeworkdb'
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
