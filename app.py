@@ -5,12 +5,13 @@ import logging
 import time
 from contextlib import asynccontextmanager
 from copy import deepcopy
+from database.models import Session
+# from psycopg import rows
+from fastapi.responses import JSONResponse
+from fastapi import APIRouter 
 from memory.query_rewriter import query_rewriter
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
-from httpcore import request
-from httpcore import request
-from sqlalchemy import exc
 from observability.tracker import tracker
 from config.settings import get_settings
 from ingestion.ingestion import ingestion_service
@@ -83,6 +84,27 @@ async def submit_ingestion_job(request: IngestionRequest, background_tasks: Back
 		raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.get("/sessions")
+def list_sessions():
+    rows = Session.get_all()
+    if not rows:
+        return JSONResponse(content=[])
+    sessions = [
+        {
+            "session_id": row[0],
+            "username": row[1],
+            "created_at": str(row[2]),
+            "last_active": str(row[3])
+        }
+        for row in rows
+    ]
+    return JSONResponse(content=sessions)
+
+
+
+
+
+	
 @app.get("/ingestion/jobs/{job_id}", response_model=IngestionJobStatusResponse)
 async def get_ingestion_job(job_id: str) -> IngestionJobStatusResponse:
 	try:
@@ -94,12 +116,13 @@ async def get_ingestion_job(job_id: str) -> IngestionJobStatusResponse:
 		raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+
 @app.post("/query", response_model=QueryResponse)
 async def query(request: QueryRequest):
     try:
         print("QUERY ENDPOINT HIT")
 
-        session_id = getattr(request, "session_id", None) or str(uuid.uuid4())
+        session_id = request.session_id or str(uuid.uuid4())
         session = session_manager.get_or_create_session(session_id)
         history = session.get_history()
 
@@ -133,7 +156,7 @@ async def query_stream(request: QueryRequest):
     try:
         print("QUERY_STREAM HIT")
 
-        session_id = getattr(request, "session_id", None) or str(uuid.uuid4())
+        session_id = request.session_id or str(uuid.uuid4())
         print("SESSION_ID =", session_id)
 
         history = session_manager.get_history(session_id)
@@ -202,10 +225,3 @@ async def query_stream(request: QueryRequest):
     except Exception as exc:
         logger.exception("Query stream execution failed")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-
-
-
-
-
-										   

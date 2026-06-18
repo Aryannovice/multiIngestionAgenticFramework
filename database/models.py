@@ -3,17 +3,17 @@ from database.db import db_obj
 
 class Session:
     @staticmethod
-    def create(username: str):
+    def create(session_id: str):
         query = """
-            INSERT INTO sessions (username)
+            INSERT INTO sessions (session_id)
             VALUES (%s)
-            RETURNING session_id, username, created_at, last_active;
+            RETURNING session_id, created_at, last_active;
         """
-        return db_obj.execute(query, (username,), fetch="one", commit=True)
+        return db_obj.execute(query, (session_id,), fetch="one", commit=True)
 
     @staticmethod
     def get_by_id(session_id: str):
-        query = "SELECT session_id, username, created_at, last_active FROM sessions WHERE session_id = %s;"
+        query = "SELECT session_id, created_at, last_active FROM sessions WHERE session_id = %s;"
         return db_obj.execute(query, (session_id,), fetch="one")
 
     @staticmethod
@@ -23,7 +23,7 @@ class Session:
 
     @staticmethod
     def get_all():
-        query = "SELECT session_id, username, created_at, last_active FROM sessions ORDER BY last_active DESC;"
+        query = "SELECT session_id, created_at, last_active FROM sessions ORDER BY last_active DESC;"
         return db_obj.execute(query, fetch="all")
 
     @staticmethod
