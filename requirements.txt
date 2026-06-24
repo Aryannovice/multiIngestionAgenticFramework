@@ -18,3 +18,4 @@ spacy
 spacy-transformers
 psycopg
 psycopg-pool
+tiktoken 
