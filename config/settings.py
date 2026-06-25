@@ -55,11 +55,15 @@ class Settings(BaseSettings):
 
 	jwt_secret: str = Field(default="", alias="JWT_SECRET")
 	jwt_expire_minutes: int = Field(default=60, alias="JWT_EXPIRE_MINUTES")
-	app_username: str = Field(default="", alias="APP_USERNAME")
-	app_password: str = Field(default="", alias="APP_PASSWORD")
+	admin_username: str = Field(default="admin", alias="ADMIN_USERNAME")
+	admin_email: str = Field(default="admin@example.com", alias="ADMIN_EMAIL")
+	admin_password: str = Field(default="", alias="ADMIN_PASSWORD")
+
+	db_url: str = Field(default="", alias="DATABASE_URL")
+	
 	
 
-db_url = 'postgresql://ayush:a1b2c3@localhost:5432/agenticframeworkdb'
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

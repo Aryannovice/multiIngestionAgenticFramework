@@ -69,7 +69,19 @@ class Token(BaseModel):
 	token_type: str = "bearer"
 
 class TokenData(BaseModel):
-	username: str | None = None
+	user_id: str
+	username: str
+
+class RegisterRequest(BaseModel):
+	username: str
+	email: str
+	password: str
+	
+
+class RegisterResponse(BaseModel):
+	user_id: str
+	username: str
+	email: str 
 
 
 class QueryResponse(BaseModel):

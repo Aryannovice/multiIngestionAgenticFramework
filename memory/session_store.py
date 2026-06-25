@@ -39,14 +39,14 @@ class SessionManager:
     def __init__(self):
         self.sessions: dict[str, SessionStore] = {}
 
-    def get_or_create_session(self, session_id: str | None = None) -> SessionStore:
+    def get_or_create_session(self, session_id: str | None = None, user_id: str = None) -> SessionStore:
         session_id = session_id or str(uuid.uuid4())
 
         if session_id not in self.sessions:
             # check DB first before creating
             existing = Session.get_by_id(session_id)
             if not existing:
-                Session.create(session_id)
+                Session.create(session_id, user_id)
             
             store = SessionStore(session_id)
 

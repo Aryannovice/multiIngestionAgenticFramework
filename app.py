@@ -5,7 +5,7 @@ import logging
 import time
 from contextlib import asynccontextmanager
 from copy import deepcopy
-from database.models import Session
+from database.models import Session, User
 # from psycopg import rows
 from fastapi.responses import JSONResponse
 from fastapi import APIRouter, Depends , status, HTTPException
@@ -15,20 +15,23 @@ from fastapi.responses import JSONResponse
 from observability.tracker import tracker
 from config.settings import get_settings
 from ingestion.ingestion import ingestion_service
-from models.schema import ErrorResponse, IngestionJobResponse, IngestionJobStatusResponse, IngestionRequest, QueryRequest, QueryResponse, Token, TokenData
+from models.schema import ErrorResponse, IngestionJobResponse, IngestionJobStatusResponse, IngestionRequest, QueryRequest, QueryResponse, RegisterResponse, Token, TokenData, RegisterRequest
 from retrieval.retrieval import retrieval_service
 from retrieval.router import router
 from utils.utils import setup_logging
 import asyncio
 from typing import Annotated
+from pwdlib import PasswordHash 
 # from memory.context_builder import ContextBuilder
 from fastapi.security import OAuth2PasswordRequestForm
 from memory.session_store import session_manager
 from auth.auth import authenticate_user, create_access_token, get_current_user
 
 settings = get_settings()
+db_url = settings.db_url
 setup_logging(settings.log_level)
 logger = logging.getLogger(__name__)
+password_hash = PasswordHash.recommended()
 
 
 async def main():
@@ -40,11 +43,20 @@ async def main():
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-	logger.info("Starting application", extra={"env": settings.app_env})
-	try:
-		yield
-	finally:
-		logger.info("Stopping application")
+    logger.info("Starting application", extra={"env": settings.app_env})
+
+    existing = User.get_by_username(settings.admin_username)
+    if not existing:
+        hashed = PasswordHash.recommended().hash(settings.admin_password)
+        User.create(settings.admin_username, settings.admin_email, hashed)
+        logger.info("Admin user created", extra={"username": settings.admin_username})
+        tracker.set_tag("admin_user_created", True)
+
+    try:
+        yield
+    finally:
+        raise RuntimeError("Application shutdown complete")
+
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
@@ -88,19 +100,18 @@ async def submit_ingestion_job(request: IngestionRequest, background_tasks: Back
 
 @app.get("/sessions")
 def list_sessions(current_user: Annotated[TokenData, Depends(get_current_user)]):
-    rows = Session.get_all()
+    rows = Session.get_by_user(current_user.user_id)
     if not rows:
         return JSONResponse(content=[])
-    sessions = [
+    return JSONResponse(content=[
         {
             "session_id": row[0],
-            "username": row[1],
+            "name": row[1],
             "created_at": str(row[2]),
-            "last_active": str(row[3])
+            "last_active": str(row[3]),
         }
         for row in rows
-    ]
-    return JSONResponse(content=sessions)
+    ])
 
 
 
@@ -117,21 +128,39 @@ async def get_ingestion_job(job_id: str) -> IngestionJobStatusResponse:
 		logger.exception("Failed to fetch ingestion job status")
 		raise HTTPException(status_code=500, detail=str(exc)) from exc
 
+@app.post("/auth/register", response_model=RegisterResponse)
+async def register(request: RegisterRequest):
+    existing = User.get_by_username(request.username)
+    if existing:
+        raise HTTPException(status_code=409, detail="Username already exists")
+    
+    hashed = password_hash.hash(request.password)
+    row = User.create(request.username, request.email, hashed)
+    
+    logger.info("AUTH | USER_REGISTERED | USER=%s", request.username)
+    return RegisterResponse(
+        user_id=str(row[0]),
+        username=row[1],
+        email=row[2],
+    )
+
 @app.post("/auth/token", response_model=Token)
-async def login(
-    form_data: Annotated[OAuth2PasswordRequestForm, Depends()]
-):
-    if not authenticate_user(form_data.username, form_data.password):
+async def login(form_data: Annotated[OAuth2PasswordRequestForm, Depends()]):
+    user = authenticate_user(form_data.username, form_data.password)
+    if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    token = create_access_token(form_data.username)
+    User.update_last_login(user["user_id"])
+    token = create_access_token(user["user_id"], user["username"])
     tracker.set_tag("auth_status", "success")
-    logger.info("AUTH | TOKEN_ISSUED | USER=%s", form_data.username)
+
+    logger.info("AUTH | TOKEN_ISSUED | USER=%s", user["username"])
     return Token(access_token=token, token_type="bearer")
+
  
 	
     
@@ -144,7 +173,7 @@ async def query(request: QueryRequest, current_user: Annotated[TokenData, Depend
         print("QUERY ENDPOINT HIT")
 
         session_id = request.session_id or str(uuid.uuid4())
-        session = session_manager.get_or_create_session(session_id)
+        session = session_manager.get_or_create_session(session_id, current_user.user_id)
         history = session.get_history()
 
         logger.info("SESSION=%s | HISTORY_SIZE=%d", session_id, len(history))
@@ -173,12 +202,16 @@ async def query(request: QueryRequest, current_user: Annotated[TokenData, Depend
 
 
 @app.post("/query/stream")
-async def query_stream(request: QueryRequest, current_user: Annotated[TokenData, Depends(get_current_user)]):
+async def query_stream(
+    request: QueryRequest,
+    current_user: Annotated[TokenData, Depends(get_current_user)]
+):
     try:
         print("QUERY_STREAM HIT")
 
         session_id = request.session_id or str(uuid.uuid4())
         print("SESSION_ID =", session_id)
+        session = session_manager.get_or_create_session(session_id, current_user.user_id)
 
         history = session_manager.get_history(session_id)
 
