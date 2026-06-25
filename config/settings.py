@@ -53,6 +53,12 @@ class Settings(BaseSettings):
 	mlflow_tracking_uri: str | None = Field(default=None, alias="MLFLOW_TRACKING_URI")
 	mlflow_experiment_name: str = Field(default="retrieval-agent", alias="MLFLOW_EXPERIMENT_NAME")
 
+	jwt_secret: str = Field(default="", alias="JWT_SECRET")
+	jwt_expire_minutes: int = Field(default=60, alias="JWT_EXPIRE_MINUTES")
+	app_username: str = Field(default="", alias="APP_USERNAME")
+	app_password: str = Field(default="", alias="APP_PASSWORD")
+	
+
 db_url = 'postgresql://ayush:a1b2c3@localhost:5432/agenticframeworkdb'
 
 @lru_cache(maxsize=1)

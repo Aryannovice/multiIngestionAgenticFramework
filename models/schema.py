@@ -64,6 +64,14 @@ class Citation(BaseModel):
 	score: float | None = None
 
 
+class Token(BaseModel):
+	access_token: str
+	token_type: str = "bearer"
+
+class TokenData(BaseModel):
+	username: str | None = None
+
+
 class QueryResponse(BaseModel):
 	answer: str
 	mode_used: RetrievalMode

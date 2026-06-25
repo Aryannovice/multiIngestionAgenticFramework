@@ -8,21 +8,23 @@ from copy import deepcopy
 from database.models import Session
 # from psycopg import rows
 from fastapi.responses import JSONResponse
-from fastapi import APIRouter 
+from fastapi import APIRouter, Depends , status, HTTPException
 from memory.query_rewriter import query_rewriter
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from observability.tracker import tracker
 from config.settings import get_settings
 from ingestion.ingestion import ingestion_service
-from models.schema import ErrorResponse, IngestionJobResponse, IngestionJobStatusResponse, IngestionRequest, QueryRequest, QueryResponse
+from models.schema import ErrorResponse, IngestionJobResponse, IngestionJobStatusResponse, IngestionRequest, QueryRequest, QueryResponse, Token, TokenData
 from retrieval.retrieval import retrieval_service
 from retrieval.router import router
 from utils.utils import setup_logging
 import asyncio
+from typing import Annotated
 # from memory.context_builder import ContextBuilder
+from fastapi.security import OAuth2PasswordRequestForm
 from memory.session_store import session_manager
-	
+from auth.auth import authenticate_user, create_access_token, get_current_user
 
 settings = get_settings()
 setup_logging(settings.log_level)
@@ -85,7 +87,7 @@ async def submit_ingestion_job(request: IngestionRequest, background_tasks: Back
 
 
 @app.get("/sessions")
-def list_sessions():
+def list_sessions(current_user: Annotated[TokenData, Depends(get_current_user)]):
     rows = Session.get_all()
     if not rows:
         return JSONResponse(content=[])
@@ -115,10 +117,29 @@ async def get_ingestion_job(job_id: str) -> IngestionJobStatusResponse:
 		logger.exception("Failed to fetch ingestion job status")
 		raise HTTPException(status_code=500, detail=str(exc)) from exc
 
+@app.post("/auth/token", response_model=Token)
+async def login(
+    form_data: Annotated[OAuth2PasswordRequestForm, Depends()]
+):
+    if not authenticate_user(form_data.username, form_data.password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
+    token = create_access_token(form_data.username)
+    tracker.set_tag("auth_status", "success")
+    logger.info("AUTH | TOKEN_ISSUED | USER=%s", form_data.username)
+    return Token(access_token=token, token_type="bearer")
+ 
+	
+    
+	
+    
 
 @app.post("/query", response_model=QueryResponse)
-async def query(request: QueryRequest):
+async def query(request: QueryRequest, current_user: Annotated[TokenData, Depends(get_current_user)]):
     try:
         print("QUERY ENDPOINT HIT")
 
@@ -152,7 +173,7 @@ async def query(request: QueryRequest):
 
 
 @app.post("/query/stream")
-async def query_stream(request: QueryRequest):
+async def query_stream(request: QueryRequest, current_user: Annotated[TokenData, Depends(get_current_user)]):
     try:
         print("QUERY_STREAM HIT")
 

@@ -7,12 +7,21 @@ from config.settings import db_url
 
 class Database:
     def __init__(self, db_url: str, min_size: int = 1, max_size: int = 7, timeout: int = 10):
+        def _check_connection(conn):
+
+            try:
+
+                conn.execute("SELECT 1")
+                return True
+            except psycopg.OperationalError:
+                return False
         try:
             self.pool = ConnectionPool(
                 conninfo=db_url,
                 min_size=min_size,
                 max_size=max_size,
                 timeout=timeout,
+                check = _check_connection,
                 kwargs={"autocommit": True},
             )
         except Exception as e:

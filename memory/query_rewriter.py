@@ -174,7 +174,7 @@ class QueryRewriter:
             "a", "to", "for", "who", "what",
             "which", "them", "those", "these", "it",
         }
-    noisy_terms = {"please", "tell", "me", "about", "give", "information"}
+    noisy_terms = {"please", "tell", "me", "about", "give", "information", "thanks", "help", "can", "you", "i", "want", "know"}
 
 
     def __init__(self, max_history: int = 7):

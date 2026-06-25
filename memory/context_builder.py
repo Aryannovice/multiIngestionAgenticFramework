@@ -49,7 +49,7 @@ class ContextBuilder:
         self,
         history: list[dict],
         query: str,
-        max_history: int = 10,
+        max_history: int = 7,
         retrieved_context: list[str] | None = None,
     ) -> list[dict]:
 
