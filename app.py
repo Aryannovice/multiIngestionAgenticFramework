@@ -44,18 +44,23 @@ async def main():
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     logger.info("Starting application", extra={"env": settings.app_env})
-
-    existing = User.get_by_username(settings.admin_username)
-    if not existing:
-        hashed = PasswordHash.recommended().hash(settings.admin_password)
-        User.create(settings.admin_username, settings.admin_email, hashed)
-        logger.info("Admin user created", extra={"username": settings.admin_username})
-        tracker.set_tag("admin_user_created", True)
-
     try:
-        yield
-    finally:
-        raise RuntimeError("Application shutdown complete")
+          
+       existing = User.get_by_username(settings.admin_username)
+       print("EXISTING ADMIN USER:", existing)
+       if not existing:
+           hashed = PasswordHash.recommended().hash(settings.admin_password)
+           result = User.create(settings.admin_username, settings.admin_email, hashed, role="admin")
+           print("ADMIN USER CREATED:", result)
+           logger.info("Admin user created", extra={"username": settings.admin_username})
+           tracker.set_tag("admin_user_created", True)
+    except Exception as exc:
+         print("Failed to create admin user:", exc)
+
+   
+    yield
+    logger.info("stopping application")
+    
 
 
 
@@ -98,6 +103,11 @@ async def submit_ingestion_job(request: IngestionRequest, background_tasks: Back
 		raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+def require_admin(current_user: Annotated[TokenData, Depends(get_current_user)]):
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin privileges required")
+    return current_user
+
 @app.get("/sessions")
 def list_sessions(current_user: Annotated[TokenData, Depends(get_current_user)]):
     rows = Session.get_by_user(current_user.user_id)
@@ -105,17 +115,32 @@ def list_sessions(current_user: Annotated[TokenData, Depends(get_current_user)])
         return JSONResponse(content=[])
     return JSONResponse(content=[
         {
-            "session_id": row[0],
-            "name": row[1],
-            "created_at": str(row[2]),
-            "last_active": str(row[3]),
+            "session_id": str(row[0]),
+            "user_id": str(row[1]),
+            "name": row[2],
+            "created_at": str(row[3]),
+            "last_active": str(row[4]),
         }
         for row in rows
     ])
 
 
 
-
+@app.get("/admin/sessions")
+def list_all_sessions(_: Annotated[TokenData, Depends(require_admin)]):
+    rows = Session.get_all()
+    if not rows:
+        return JSONResponse(content=[])
+    return JSONResponse(content=[
+        {
+            "session_id": str(row[0]),
+            "user_id": str(row[1]),
+            "name": row[2],
+            "created_at": str(row[3]),
+            "last_active": str(row[4]),
+        }
+        for row in rows
+    ])
 
 	
 @app.get("/ingestion/jobs/{job_id}", response_model=IngestionJobStatusResponse)
@@ -155,7 +180,7 @@ async def login(form_data: Annotated[OAuth2PasswordRequestForm, Depends()]):
         )
 
     User.update_last_login(user["user_id"])
-    token = create_access_token(user["user_id"], user["username"])
+    token = create_access_token(user["user_id"], user["username"], user["role"])
     tracker.set_tag("auth_status", "success")
 
     logger.info("AUTH | TOKEN_ISSUED | USER=%s", user["username"])
@@ -213,7 +238,7 @@ async def query_stream(
         print("SESSION_ID =", session_id)
         session = session_manager.get_or_create_session(session_id, current_user.user_id)
 
-        history = session_manager.get_history(session_id)
+        history = session_manager.get_history(session_id, current_user.user_id)
 
         logger.info(
             "SESSION=%s | HISTORY_SIZE=%d",
@@ -244,7 +269,7 @@ async def query_stream(
 
         else:
             stream = retrieval_service._hybrid_retrieval_stream(rewritten_request)
-
+        user_id = current_user.user_id
         def memory_stream():
             full_response = []
 
@@ -258,6 +283,7 @@ async def query_stream(
                 session_id=session_id,
                 query=request.query,
                 response=final_answer,
+                user_id=user_id
             )
 
             # Tracker calls placed correctly here

@@ -71,6 +71,7 @@ class Token(BaseModel):
 class TokenData(BaseModel):
 	user_id: str
 	username: str
+	role: str = "user"
 
 class RegisterRequest(BaseModel):
 	username: str
@@ -81,8 +82,8 @@ class RegisterRequest(BaseModel):
 class RegisterResponse(BaseModel):
 	user_id: str
 	username: str
-	email: str 
-
+	email: str
+	
 
 class QueryResponse(BaseModel):
 	answer: str

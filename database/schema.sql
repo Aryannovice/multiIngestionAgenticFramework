@@ -1,5 +1,3 @@
-
-
 CREATE TABLE IF NOT EXISTS users (
     user_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     username TEXT UNIQUE NOT NULL,
@@ -7,7 +5,8 @@ CREATE TABLE IF NOT EXISTS users (
     hashed_password TEXT NOT NULL,
     is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    last_login TIMESTAMPTZ
+    last_login TIMESTAMPTZ,
+    role TEXT NOT NULL DEFAULT 'user'
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
@@ -38,3 +37,6 @@ CREATE TABLE IF NOT EXISTS retrieval_logs (
     created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
 );
+
+CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_retrieval_logs_session_id ON retrieval_logs(session_id);

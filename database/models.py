@@ -3,18 +3,20 @@ from database.db import db_obj
 
 class User:
     @staticmethod
-    def create(username: str, email: str, hashed_password: str):
+    def create(username: str, email: str, hashed_password: str, role: str = "user"):
         query = """
-            INSERT INTO users (username, email, hashed_password)
-            VALUES (%s, %s, %s)
+            INSERT INTO users (username, email, hashed_password, role)
+            VALUES (%s, %s, %s, %s)
             RETURNING user_id, username, email, is_active, created_at;
         """
-        return db_obj.execute(query, (username, email, hashed_password), fetch="one", commit=True)
+        return db_obj.execute(query, (username, email, hashed_password, role), fetch="one", commit=True)
+    
+    
 
     @staticmethod
     def get_by_username(username: str):
         query = """
-            SELECT user_id, username, email, hashed_password, is_active
+            SELECT user_id, username, email, hashed_password, is_active, role
             FROM users
             WHERE username = %s;
         """
@@ -27,7 +29,7 @@ class User:
 
     @staticmethod
     def get_by_id(user_id: str):
-        query = "SELECT user_id, username, email, is_active FROM users WHERE user_id = %s;"
+        query = "SELECT user_id, username, email, is_active, role FROM users WHERE user_id = %s;"
         return db_obj.execute(query, (user_id,), fetch="one")
 
     @staticmethod
@@ -42,6 +44,16 @@ class User:
 
 
 class Session:
+
+    @staticmethod
+    def get_all():
+        query = """
+            SELECT session_id, user_id, name, created_at, last_active
+            FROM sessions
+            ORDER BY last_active DESC;
+        """
+        return db_obj.execute(query, fetch="all")
+
     @staticmethod
     def create(session_id: str, user_id: str, name: str = None):
         query = """
@@ -70,6 +82,17 @@ class Session:
             ORDER BY last_active DESC;
         """
         return db_obj.execute(query, (user_id,), fetch="all")
+    
+
+    @staticmethod
+    def get_by_id_and_user(session_id: str, user_id: str):
+        query = """
+        SELECT session_id, user_id, name, created_at, last_active
+        FROM sessions
+        WHERE session_id = %s AND user_id = %s;
+    """
+        return db_obj.execute(query, (session_id, user_id), fetch="one")
+    
 
     @staticmethod
     def update_last_active(session_id: str):
