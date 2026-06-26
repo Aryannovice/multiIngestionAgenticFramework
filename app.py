@@ -300,6 +300,7 @@ async def query_stream(
         return StreamingResponse(
             memory_stream(),
             media_type="text/event-stream",
+            headers={"X-Session-ID": session_id}  ##if we want a session id in form of text we just refer from here staright up
         )
 
     except Exception as exc:
