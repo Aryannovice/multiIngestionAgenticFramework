@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS users (
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
-    session_id TEXT PRIMARY KEY,
+    session_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL,
     name TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 
 CREATE TABLE IF NOT EXISTS messages (
     message_id  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    session_id  TEXT NOT NULL,
+    session_id  UUID NOT NULL,
     turn_index  INTEGER NOT NULL DEFAULT 0,
     content     TEXT NOT NULL,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -32,7 +32,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id);
 
 CREATE TABLE IF NOT EXISTS retrieval_logs (
     log_id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    session_id     TEXT NOT NULL,
+    session_id     UUID NOT NULL,
     retrieval_info TEXT,
     created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
