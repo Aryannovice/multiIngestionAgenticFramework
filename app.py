@@ -8,7 +8,7 @@ from copy import deepcopy
 from database.models import Session, User
 # from psycopg import rows
 from fastapi.responses import JSONResponse
-from fastapi import APIRouter, Depends , status, HTTPException
+from fastapi import APIRouter, Depends, Response , status, HTTPException
 from memory.query_rewriter import query_rewriter
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -196,9 +196,11 @@ async def login(form_data: Annotated[OAuth2PasswordRequestForm, Depends()]):
 async def query(request: QueryRequest, current_user: Annotated[TokenData, Depends(get_current_user)]):
     try:
         print("QUERY ENDPOINT HIT")
+        user_id = current_user.user_id
 
         session_id = request.session_id or str(uuid.uuid4())
-        session = session_manager.get_or_create_session(session_id, current_user.user_id)
+        session = session_manager.get_or_create_session(session_id, user_id)
+        session_id = session.session_id
         history = session.get_history()
 
         logger.info("SESSION=%s | HISTORY_SIZE=%d", session_id, len(history))
@@ -216,7 +218,11 @@ async def query(request: QueryRequest, current_user: Annotated[TokenData, Depend
         logger.info(f"Response content: {response}")
 
         session.append_history(request.query, response.answer)
-        return response
+        return Response(
+            content=response.model_dump_json(),
+            media_type="application/json",
+            headers={"X-Session-Id": session_id},
+        )
 
     except Exception as exc:
         logger.exception("Query execution failed")
@@ -232,11 +238,15 @@ async def query_stream(
     current_user: Annotated[TokenData, Depends(get_current_user)]
 ):
     try:
+        user_id = current_user.user_id
         print("QUERY_STREAM HIT")
 
         session_id = request.session_id or str(uuid.uuid4())
         print("SESSION_ID =", session_id)
-        session = session_manager.get_or_create_session(session_id, current_user.user_id)
+        session = session_manager.get_or_create_session(request.session_id, user_id)
+        session_id = session.session_id
+
+        print("SESSION_ID AFTER GET_OR_CREATE_SESSION =", session_id)
 
         history = session_manager.get_history(session_id, current_user.user_id)
 

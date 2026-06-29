@@ -52,14 +52,23 @@ class SessionManager:
 
         if cache_key not in self.sessions:
         # scope the DB check to this user
-            existing = Session.get_by_id_and_user(session_id, user_id)
+            existing = Session.get_by_id_and_user(session_id, user_id) 
             if not existing:
-                Session.create(session_id, user_id)
+                anyone_owns_it = Session.get_by_id(session_id)
+                if anyone_owns_it:
+                    session_id = str(uuid.uuid4())
+                    cache_key = (session_id, user_id)
+                    Session.create(session_id, user_id)
+
+                else:
+                    Session.create(session_id, user_id)
 
             store = SessionStore(session_id)
         # only load messages if session belongs to this user
             if existing:
                 rows = Message.get_by_session(session_id)
+            else:
+                rows = []
                 if rows:
                     for row in rows:
                         raw = row[3]
